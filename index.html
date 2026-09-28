@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>التحكم بالذراع الآلية عبر الإنترنت</title>
+<!-- مكتبة Paho MQTT للاتصال بـ WebSockets عبر HTTPS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+
+<style>
+body { 
+  font-family: Arial, sans-serif; 
+  text-align: center; 
+  background: #f0f0f0; 
+  user-select: none; 
+  margin: 0; 
+  padding: 20px; 
+}
+
+h2 { margin-bottom: 5px; }
+#status-box { margin-bottom: 20px; font-weight: bold; }
+.status-online { color: green; }
+.status-offline { color: red; }
+
+.main-container {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  max-width: 950px;
+  margin: 0 auto;
+}
+
+.left-panel { flex: 1; min-width: 280px; }
+.right-panel { flex: 1.2; min-width: 340px; }
+
+.card { 
+  background: white; 
+  padding: 15px; 
+  margin-bottom: 15px; 
+  border-radius: 15px; 
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+}
+
+.slider { width: 90%; }
+
+/* المربع بمقاس 325px */
+#joystick-container { 
+  position: relative; 
+  width: 325px; 
+  height: 325px; 
+  background: #ddd; 
+  border-radius: 20px; 
+  margin: 15px auto; 
+  touch-action: none; 
+  border: 3px solid #bcbcbc; 
+}
+
+/* المقبض بمقاس 50px */
+#joystick-handle { 
+  position: absolute; 
+  width: 50px; 
+  height: 50px; 
+  background: #007bff; 
+  border-radius: 50%; 
+  top: 137px; 
+  left: 137px; 
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3); 
+}
+</style>
+</head>
+<body>
+
+<h2>ESP32 Internet Control</h2>
+<div id="status-box">الحالة: <span id="status" class="status-offline">جاري الاتصال...</span></div>
+
+<div class="main-container">
+
+  <!-- قسم السلايدرات -->
+  <div class="left-panel">
+    <div class="card">
+      <h3>Base (القاعدة)</h3>
+      <input type="range" min="0" max="180" value="90" class="slider" onchange="sendData('base', this.value)">
+    </div>
+
+    <div class="card">
+      <h3>Wrist Joint (المعصم)</h3>
+      <input type="range" min="0" max="180" value="90" class="slider" onchange="sendData('servo4', this.value)">
+    </div>
+
+    <div class="card">
+      <h3>Gripper (القابض)</h3>
+      <input type="range" min="0" max="180" value="90" class="slider" onchange="sendData('grip', this.value)">
+    </div>
+  </div>
+
+  <!-- قسم المربع (Joints X / Y) -->
+  <div class="right-panel">
+    <div class="card">
+      <h3>Joints X / Y (التحكم بالمحاور)</h3>
+      <div id="joystick-container">
+        <div id="joystick-handle"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// إعدادات اتصال MQTT المشفرة (تتوافق مع GitHub Pages)
+const broker = "broker.hivemq.com";
+const port = 8884; // منفذ SSL WebSockets
+const topic = "fatima_robot_arm_2026/control"; // اسم القناة
+
+const clientID = "WebClient_" + Math.random().toString(16).substr(2, 8);
+const client = new Paho.MQTT.Client(broker, port, clientID);
+
+client.onConnectionLost = function (responseObject) {
+  const statusEl = document.getElementById("status");
+  statusEl.innerText = "انقطع الاتصال";
+  statusEl.className = "status-offline";
+};
+
+client.connect({
+  useSSL: true, // تفعيل التشفير لمنع التعليق وحظر المتصفح
+  onSuccess: function () {
+    const statusEl = document.getElementById("status");
+    statusEl.innerText = "متصل بالسيرفر وجاهز للتحكم!";
+    statusEl.className = "status-online";
+  },
+  onFailure: function (err) {
+    console.log(err);
+    const statusEl = document.getElementById("status");
+    statusEl.innerText = "فشل الاتصال";
+    statusEl.className = "status-offline";
+  }
+});
+
+function sendData(name, val) {
+  if (client.isConnected()) {
+    const message = new Paho.MQTT.Message(name + ":" + val);
+    message.destinationName = topic;
+    client.send(message);
+  }
+}
+
+// حركة المربع 325px والمقبض 50px
+const container = document.getElementById('joystick-container');
+const handle = document.getElementById('joystick-handle');
+let isDragging = false;
+
+function handleMove(e) {
+  if (!isDragging) return;
+  const rect = container.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  
+  let x = clientX - rect.left - 25;
+  let y = clientY - rect.top - 25;
+  
+  if (x < 0) x = 0; if (x > 275) x = 275;
+  if (y < 0) y = 0; if (y > 275) y = 275;
+  
+  handle.style.left = x + 'px';
+  handle.style.top = y + 'px';
+  
+  let angleX = Math.round((x / 275) * 180);
+  let angleY = Math.round((1 - (y / 275)) * 180);
+  
+  sendData('armX', angleX);
+  sendData('armY', angleY);
+}
+
+container.addEventListener('mousedown', () => isDragging = true);
+container.addEventListener('touchstart', () => isDragging = true);
+window.addEventListener('mouseup', () => isDragging = false);
+window.addEventListener('touchend', () => isDragging = false);
+container.addEventListener('mousemove', handleMove);
+container.addEventListener('touchmove', handleMove);
+</script>
+</body>
+</html>
