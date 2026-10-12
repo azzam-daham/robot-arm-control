@@ -1,0 +1,93 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+
+// ===== 1. بيانات الواي فاي (نقطة اتصال الجوال 2.4GHz) =====
+const char* ssid     = "------";       // اسم شبكة الواي فاي
+const char* password = "------";   // كلمة المرور
+
+// ===== 2. بيانات سيرفر MQTT المجاني (HiveMQ) =====
+const char* mqtt_server = "broker.hivemq.com";
+const int   mqtt_port   = 1883;
+
+// ===== 3. اسم الـ Topic الموحد =====
+const char* topic_control = "AZZAM2026";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+#define SERVOMIN 150
+#define SERVOMAX 600
+
+// دالة تحويل الزاوية (0 - 180) إلى نبضة PWM
+int angleToPulse(int angle) {
+  angle = constrain(angle, 0, 180);
+  return map(angle, 0, 180, SERVOMIN, SERVOMAX);
+}
+
+// دالة استقبال الأوامر وتحريك المحركات عبر PCA9685
+void callback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  int colonIndex = message.indexOf(':');
+  if (colonIndex != -1) {
+    String name = message.substring(0, colonIndex);
+    int val = message.substring(colonIndex + 1).toInt();
+
+    if (name == "base")   pwm.setPWM(0, 0, angleToPulse(val)); // القاعدة (Pin 0)
+    if (name == "armX") {
+      pwm.setPWM(1, 0, angleToPulse(val));                    // Joint 1 (Pin 1)
+      pwm.setPWM(2, 0, angleToPulse(val));                    // Joint 2 (Pin 2)
+    }
+    if (name == "armY")   pwm.setPWM(3, 0, angleToPulse(val)); // Joint 3 (Pin 3)
+    if (name == "servo4") pwm.setPWM(4, 0, angleToPulse(val)); // المعصم (Pin 4)
+    if (name == "grip")   pwm.setPWM(5, 0, angleToPulse(val)); // القابض (Pin 5)
+  }
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    String clientId = "ESP32ArmClient-" + String(random(0xffff), HEX);
+    if (client.connect(clientId.c_str())) {
+      Serial.println(" Connected!");
+      client.subscribe(topic_control);
+    } else {
+      Serial.print(" Failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" Retrying in 3 seconds...");
+      delay(3000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // إعداد بروتوكول I2C للدبابيس ESP32 (SDA=21, SCL=22)
+  Wire.begin(21, 22, 400000);
+  pwm.begin();
+  pwm.setPWMFreq(50);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected!");
+
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+}
